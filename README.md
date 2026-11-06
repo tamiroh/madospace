@@ -13,14 +13,20 @@ A single web page with its own window system, for keeping several live pages (li
 
 ## Development
 
+Written in [Elm](https://elm-lang.org/) with no other build tools. `npm` is only used to pin the Elm compiler.
+
 ```sh
 npm install
-npm run dev
+npm run dev    # compiles to static/elm.js and starts elm reactor
 ```
+
+Open <http://localhost:8000/static/index.html>. Re-run `npx elm make src/Main.elm --output=static/elm.js` and reload after editing.
+
+`npm run build` writes the optimized site to `dist/`.
 
 ## Deployment
 
-`.github/workflows/deploy.yml` builds and deploys to GitHub Pages. Set Settings → Pages → Source to "GitHub Actions", and every push to `main` is deployed. The Vite `base` is relative, so it works under any repository name.
+`.github/workflows/deploy.yml` builds and deploys to GitHub Pages. Set Settings → Pages → Source to "GitHub Actions", and every push to `main` is deployed. All asset paths are relative, so it works under any repository name.
 
 ## Limitations
 

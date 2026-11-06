@@ -2,21 +2,11 @@
   "name": "madospace",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "build": "elm make src/Main.elm --optimize --output=dist/elm.js && cp static/index.html static/main.js static/style.css dist/",
+    "dev": "elm make src/Main.elm --output=static/elm.js && elm reactor"
   },
   "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.2.1",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.6"
+    "elm": "^0.19.3-0"
   }
 }

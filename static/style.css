@@ -192,11 +192,11 @@ button:disabled {
   pointer-events: none;
 }
 
-/* Do not pass events to iframes while dragging or resizing */
-body.interacting iframe {
-  pointer-events: none;
-}
-body.interacting {
+/* Covers the iframes while dragging or resizing so they cannot swallow mouse events */
+.drag-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
   user-select: none;
 }
 
