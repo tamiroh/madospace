@@ -1,0 +1,248 @@
+:root {
+  --bg: #0f1115;
+  --desk: #15181e;
+  --panel: #1d2129;
+  --panel-active: #2a3140;
+  --border: #2e3440;
+  --text: #d8dee9;
+  --muted: #8a93a3;
+  --accent: #5e9cff;
+  --danger: #e5534b;
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: var(--panel-active);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.logo {
+  font-weight: 700;
+  margin-right: 8px;
+  letter-spacing: 0.04em;
+}
+.spacer {
+  flex: 1;
+}
+
+.desk {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: var(--desk);
+}
+
+.hint {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.8;
+  pointer-events: none;
+}
+
+/* ---- window ---- */
+
+.win {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.4);
+}
+.win.active {
+  border-color: var(--accent);
+}
+.win.locked {
+  border-radius: 0;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 8px;
+  background: var(--panel);
+  cursor: grab;
+  user-select: none;
+  flex: none;
+}
+.win.active .titlebar {
+  background: var(--panel-active);
+}
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.url {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 2px 6px;
+  outline: none;
+}
+.buttons {
+  display: flex;
+  gap: 2px;
+  cursor: default;
+}
+.buttons button {
+  border: none;
+  padding: 2px 6px;
+  min-width: 22px;
+  line-height: 1.2;
+}
+.buttons .zoom {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.buttons .close:hover {
+  background: var(--danger);
+}
+
+.body {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+.body iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 0;
+  transform-origin: 0 0;
+  background: #fff;
+}
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  color: var(--muted);
+  background: var(--desk);
+}
+.notice {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: rgb(120 80 0 / 0.9);
+  color: #fff;
+  pointer-events: none;
+}
+
+/* Do not pass events to iframes while dragging or resizing */
+body.interacting iframe {
+  pointer-events: none;
+}
+body.interacting {
+  user-select: none;
+}
+
+.handle {
+  position: absolute;
+  z-index: 1;
+}
+.handle.n,
+.handle.s {
+  left: 6px;
+  right: 6px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.handle.e,
+.handle.w {
+  top: 6px;
+  bottom: 6px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.handle.n { top: 0; }
+.handle.s { bottom: 0; }
+.handle.e { right: 0; }
+.handle.w { left: 0; }
+.handle.ne,
+.handle.nw,
+.handle.se,
+.handle.sw {
+  width: 12px;
+  height: 12px;
+}
+.handle.ne { top: 0; right: 0; cursor: nesw-resize; }
+.handle.sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.handle.nw { top: 0; left: 0; cursor: nwse-resize; }
+.handle.se { bottom: 0; right: 0; cursor: nwse-resize; }
+
+.unlock {
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  z-index: 100000;
+  opacity: 0.15;
+  background: var(--panel);
+  transition: opacity 0.2s;
+}
+.unlock:hover {
+  opacity: 1;
+}
