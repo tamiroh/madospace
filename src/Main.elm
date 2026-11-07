@@ -57,14 +57,17 @@ idString (WinId id) =
     id
 
 
+{-| Position and size are fractions (0–1) of the desk, so the layout keeps
+filling the screen when the desk changes size (fullscreen, lock, browser resize).
+-}
 type alias Win =
     { id : WinId
     , title : String
     , url : String
-    , x : Int
-    , y : Int
-    , w : Int
-    , h : Int
+    , x : Float
+    , y : Float
+    , w : Float
+    , h : Float
     , z : Int
     , zoom : Float
     , maximized : Bool
@@ -72,8 +75,14 @@ type alias Win =
     }
 
 
+{-| A window's geometry in pixels, used while dragging.
+-}
 type alias Rect =
     { x : Int, y : Int, w : Int, h : Int }
+
+
+type alias Area =
+    { width : Int, height : Int }
 
 
 type Edge
@@ -192,15 +201,16 @@ update msg model =
                     { id = id
                     , title = "New window"
                     , url = ""
-                    , x = offset
-                    , y = offset
-                    , w = 640
-                    , h = 400
+                    , x = 0
+                    , y = 0
+                    , w = 0
+                    , h = 0
                     , z = topZ model.windows + 1
                     , zoom = 1
                     , maximized = False
                     , noticeDismissed = False
                     }
+                        |> setRect (deskArea model) { x = offset, y = offset, w = 640, h = 400 }
             in
             ( { model | windows = model.windows ++ [ win ], editing = Just { id = id, draft = "" } }
             , focusUrlInput id
@@ -228,19 +238,25 @@ update msg model =
 
                     else
                         let
+                            area =
+                                deskArea model
+
+                            r =
+                                toRect area win
+
                             -- Dragging a maximized window restores its size and keeps it under the cursor
                             base =
                                 if win.maximized then
-                                    { x = x - win.w // 2, y = max 0 (y - toolbarHeight - 14), w = win.w, h = win.h }
+                                    { r | x = x - r.w // 2, y = max 0 (y - toolbarHeight - 14) }
 
                                 else
-                                    { x = win.x, y = win.y, w = win.w, h = win.h }
+                                    r
                         in
                         ( { model
                             | windows =
                                 model.windows
                                     |> raise id
-                                    |> updateWin id (\w -> setRect base { w | maximized = False })
+                                    |> updateWin id (\w -> setRect area base { w | maximized = False })
                             , drag = Just { id = id, edge = edge, startX = x, startY = y, base = base }
                           }
                         , Cmd.none
@@ -256,7 +272,7 @@ update msg model =
                         r =
                             dragRect d.edge d.base (x - d.startX) (y - d.startY)
                     in
-                    ( { model | windows = updateWin d.id (setRect r) model.windows }, Cmd.none )
+                    ( { model | windows = updateWin d.id (setRect (deskArea model) r) model.windows }, Cmd.none )
 
         DragEnd ->
             ( { model | drag = Nothing }, Cmd.none )
@@ -334,7 +350,7 @@ urlInputId id =
     "url-" ++ idString id
 
 
-deskArea : Model -> { width : Int, height : Int }
+deskArea : Model -> Area
 deskArea model =
     { width = model.viewport.width
     , height =
@@ -397,7 +413,7 @@ raise id windows =
 {-| Arrange windows in a grid whose cells are as close to square as possible,
 keeping their current reading order (top to bottom, left to right).
 -}
-tile : { width : Int, height : Int } -> List Win -> List Win
+tile : Area -> List Win -> List Win
 tile area windows =
     let
         n =
@@ -414,12 +430,6 @@ tile area windows =
             rows =
                 ceiling (toFloat n / toFloat cols)
 
-            cw =
-                area.width // cols
-
-            ch =
-                area.height // rows
-
             order =
                 windows
                     |> List.sortBy (\w -> ( w.y, w.x ))
@@ -431,7 +441,13 @@ tile area windows =
                     i =
                         Dict.get (idString w.id) order |> Maybe.withDefault 0
                 in
-                { w | maximized = False, x = modBy cols i * cw, y = (i // cols) * ch, w = cw, h = ch }
+                { w
+                    | maximized = False
+                    , x = toFloat (modBy cols i) / toFloat cols
+                    , y = toFloat (i // cols) / toFloat rows
+                    , w = 1 / toFloat cols
+                    , h = 1 / toFloat rows
+                }
         in
         List.map place windows
 
@@ -457,9 +473,25 @@ freshId windows =
 -- GEOMETRY
 
 
-setRect : Rect -> Win -> Win
-setRect r win =
-    { win | x = r.x, y = r.y, w = r.w, h = r.h }
+toRect : Area -> Win -> Rect
+toRect area win =
+    { x = round (win.x * toFloat area.width)
+    , y = round (win.y * toFloat area.height)
+    , w = round (win.w * toFloat area.width)
+    , h = round (win.h * toFloat area.height)
+    }
+
+
+setRect : Area -> Rect -> Win -> Win
+setRect area r win =
+    let
+        fx v =
+            toFloat v / toFloat (max 1 area.width)
+
+        fy v =
+            toFloat v / toFloat (max 1 area.height)
+    in
+    { win | x = fx r.x, y = fy r.y, w = fx r.w, h = fy r.h }
 
 
 edges : List Edge
@@ -691,24 +723,51 @@ stripPrefix prefix s =
 
 flagsDecoder : D.Decoder Flags
 flagsDecoder =
-    D.map4 Flags
-        (D.field "saved" (D.oneOf [ savedDecoder, D.succeed { windows = [], locked = False } ]))
+    D.map2 Area
         (D.field "width" D.int)
         (D.field "height" D.int)
-        (D.field "https" D.bool)
+        |> D.andThen
+            (\viewport ->
+                D.map2 (\saved https -> Flags saved viewport.width viewport.height https)
+                    (D.field "saved"
+                        (D.oneOf
+                            [ savedDecoder { viewport | height = viewport.height - toolbarHeight }
+                            , D.succeed { windows = [], locked = False }
+                            ]
+                        )
+                    )
+                    (D.field "https" D.bool)
+            )
 
 
-savedDecoder : D.Decoder Saved
-savedDecoder =
-    D.map2 Saved
-        (D.field "windows" (D.list winDecoder))
-        (D.oneOf [ D.field "locked" D.bool, D.succeed False ])
+{-| Version 1 stored geometry in pixels; convert it to fractions of `area`.
+-}
+savedDecoder : Area -> D.Decoder Saved
+savedDecoder area =
+    D.oneOf [ D.field "version" D.int, D.succeed 1 ]
+        |> D.andThen
+            (\version ->
+                let
+                    scale =
+                        if version >= 2 then
+                            { x = identity, y = identity }
+
+                        else
+                            { x = \v -> v / toFloat (max 1 area.width)
+                            , y = \v -> v / toFloat (max 1 area.height)
+                            }
+                in
+                D.map2 Saved
+                    (D.field "windows" (D.list (winDecoder scale)))
+                    (D.oneOf [ D.field "locked" D.bool, D.succeed False ])
+            )
 
 
 encodeSaved : Model -> Enc.Value
 encodeSaved model =
     Enc.object
-        [ ( "windows", Enc.list encodeWin model.windows )
+        [ ( "version", Enc.int 2 )
+        , ( "windows", Enc.list encodeWin model.windows )
         , ( "locked", Enc.bool model.locked )
         ]
 
@@ -719,10 +778,10 @@ encodeWin win =
         [ ( "id", Enc.string (idString win.id) )
         , ( "title", Enc.string win.title )
         , ( "url", Enc.string win.url )
-        , ( "x", Enc.int win.x )
-        , ( "y", Enc.int win.y )
-        , ( "w", Enc.int win.w )
-        , ( "h", Enc.int win.h )
+        , ( "x", Enc.float win.x )
+        , ( "y", Enc.float win.y )
+        , ( "w", Enc.float win.w )
+        , ( "h", Enc.float win.h )
         , ( "z", Enc.int win.z )
         , ( "zoom", Enc.float win.zoom )
         , ( "maximized", Enc.bool win.maximized )
@@ -730,16 +789,16 @@ encodeWin win =
         ]
 
 
-winDecoder : D.Decoder Win
-winDecoder =
+winDecoder : { x : Float -> Float, y : Float -> Float } -> D.Decoder Win
+winDecoder scale =
     D.succeed Win
         |> andMap (D.field "id" (D.map WinId D.string))
         |> andMap (D.field "title" D.string)
         |> andMap (D.field "url" D.string)
-        |> andMap (D.field "x" number)
-        |> andMap (D.field "y" number)
-        |> andMap (D.field "w" number)
-        |> andMap (D.field "h" number)
+        |> andMap (D.field "x" (D.map scale.x D.float))
+        |> andMap (D.field "y" (D.map scale.y D.float))
+        |> andMap (D.field "w" (D.map scale.x D.float))
+        |> andMap (D.field "h" (D.map scale.y D.float))
         |> andMap (D.oneOf [ D.field "z" number, D.succeed 1 ])
         |> andMap (D.oneOf [ D.field "zoom" D.float, D.succeed 1 ])
         |> andMap (D.oneOf [ D.field "maximized" D.bool, D.succeed False ])
@@ -862,7 +921,7 @@ viewWindow model active win =
                 [ A.style "left" "0", A.style "top" "0", A.style "width" "100%", A.style "height" "100%" ]
 
             else
-                [ A.style "left" (px win.x), A.style "top" (px win.y), A.style "width" (px win.w), A.style "height" (px win.h) ]
+                [ A.style "left" (percent win.x), A.style "top" (percent win.y), A.style "width" (percent win.w), A.style "height" (percent win.h) ]
     in
     div
         ([ A.classList [ ( "win", True ), ( "active", active ), ( "locked", model.locked ) ]
@@ -1058,6 +1117,11 @@ iconButton title label msg =
 px : Int -> String
 px n =
     String.fromInt n ++ "px"
+
+
+percent : Float -> String
+percent f =
+    String.fromFloat (f * 100) ++ "%"
 
 
 onLeftMouseDown : (Int -> Int -> Msg) -> Attribute Msg

@@ -9,6 +9,7 @@ A single web page with its own window system, for keeping several live pages (li
 - Per-window zoom (25–300%) and reload
 - Tile layout and fullscreen
 - Lock mode: hides the toolbar and title bars and freezes the layout (unlock with 🔓 in the bottom-right corner)
+- Window positions and sizes are relative to the screen, so the layout keeps filling it in fullscreen, lock mode, or after resizing the browser
 - The layout is saved to `localStorage` automatically
 
 ## Development
