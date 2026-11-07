@@ -39,15 +39,26 @@ type alias Model =
     { windows : List Win
     , locked : Bool
     , drag : Maybe Drag
-    , editing : Maybe { id : String, draft : String }
-    , reloads : Dict String Int
+    , editing : Maybe { id : WinId, draft : String }
+    , reloads : Dict String Int -- keyed by `idString`, since Dict keys must be comparable
     , viewport : { width : Int, height : Int }
     , https : Bool
     }
 
 
+{-| Identifies a window. Also used as its DOM key, so it never changes.
+-}
+type WinId
+    = WinId String
+
+
+idString : WinId -> String
+idString (WinId id) =
+    id
+
+
 type alias Win =
-    { id : String
+    { id : WinId
     , title : String
     , url : String
     , x : Int
@@ -77,7 +88,7 @@ type Edge
 
 
 type alias Drag =
-    { id : String
+    { id : WinId
     , edge : Maybe Edge
     , startX : Int
     , startY : Int
@@ -128,16 +139,16 @@ init value =
 
 type Msg
     = AddWindow
-    | Close String
-    | Raise String
-    | StartDrag String (Maybe Edge) Int Int
+    | Close WinId
+    | Raise WinId
+    | StartDrag WinId (Maybe Edge) Int Int
     | DragMove Int Int
     | DragEnd
-    | ToggleMaximize String
-    | SetZoom String Float
-    | Reload String
-    | DismissNotice String
-    | EditUrl String
+    | ToggleMaximize WinId
+    | SetZoom WinId Float
+    | Reload WinId
+    | DismissNotice WinId
+    | EditUrl WinId
     | Draft String
     | CommitUrl
     | CancelEdit
@@ -198,7 +209,7 @@ update msg model =
         Close id ->
             ( { model
                 | windows = List.filter (\w -> w.id /= id) model.windows
-                , reloads = Dict.remove id model.reloads
+                , reloads = Dict.remove (idString id) model.reloads
               }
             , Cmd.none
             )
@@ -259,7 +270,7 @@ update msg model =
             )
 
         Reload id ->
-            ( { model | reloads = Dict.update id (\n -> Just (Maybe.withDefault 0 n + 1)) model.reloads }, Cmd.none )
+            ( { model | reloads = Dict.update (idString id) (\n -> Just (Maybe.withDefault 0 n + 1)) model.reloads }, Cmd.none )
 
         DismissNotice id ->
             ( { model | windows = updateWin id (\w -> { w | noticeDismissed = True }) model.windows }, Cmd.none )
@@ -313,14 +324,14 @@ update msg model =
             ( model, Cmd.none )
 
 
-focusUrlInput : String -> Cmd Msg
+focusUrlInput : WinId -> Cmd Msg
 focusUrlInput id =
     Task.attempt (\_ -> NoOp) (Browser.Dom.focus (urlInputId id))
 
 
-urlInputId : String -> String
+urlInputId : WinId -> String
 urlInputId id =
-    "url-" ++ id
+    "url-" ++ idString id
 
 
 deskArea : Model -> { width : Int, height : Int }
@@ -341,12 +352,12 @@ deskArea model =
 -- WINDOW LIST
 
 
-findWin : String -> List Win -> Maybe Win
+findWin : WinId -> List Win -> Maybe Win
 findWin id windows =
     List.filter (\w -> w.id == id) windows |> List.head
 
 
-updateWin : String -> (Win -> Win) -> List Win -> List Win
+updateWin : WinId -> (Win -> Win) -> List Win -> List Win
 updateWin id f =
     List.map
         (\w ->
@@ -365,7 +376,7 @@ topZ windows =
 
 {-| Bring a window to the front by raising its `z` (the list order stays the same).
 -}
-raise : String -> List Win -> List Win
+raise : WinId -> List Win -> List Win
 raise id windows =
     let
         top =
@@ -412,26 +423,26 @@ tile area windows =
             order =
                 windows
                     |> List.sortBy (\w -> ( w.y, w.x ))
-                    |> List.indexedMap (\i w -> ( w.id, i ))
+                    |> List.indexedMap (\i w -> ( idString w.id, i ))
                     |> Dict.fromList
 
             place w =
                 let
                     i =
-                        Dict.get w.id order |> Maybe.withDefault 0
+                        Dict.get (idString w.id) order |> Maybe.withDefault 0
                 in
                 { w | maximized = False, x = modBy cols i * cw, y = (i // cols) * ch, w = cw, h = ch }
         in
         List.map place windows
 
 
-freshId : List Win -> String
+freshId : List Win -> WinId
 freshId windows =
     let
         go n =
             let
                 candidate =
-                    "w" ++ String.fromInt n
+                    WinId ("w" ++ String.fromInt n)
             in
             if List.any (\w -> w.id == candidate) windows then
                 go (n + 1)
@@ -705,7 +716,7 @@ encodeSaved model =
 encodeWin : Win -> Enc.Value
 encodeWin win =
     Enc.object
-        [ ( "id", Enc.string win.id )
+        [ ( "id", Enc.string (idString win.id) )
         , ( "title", Enc.string win.title )
         , ( "url", Enc.string win.url )
         , ( "x", Enc.int win.x )
@@ -722,7 +733,7 @@ encodeWin win =
 winDecoder : D.Decoder Win
 winDecoder =
     D.succeed Win
-        |> andMap (D.field "id" D.string)
+        |> andMap (D.field "id" (D.map WinId D.string))
         |> andMap (D.field "title" D.string)
         |> andMap (D.field "url" D.string)
         |> andMap (D.field "x" number)
@@ -755,7 +766,7 @@ subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
         [ Browser.Events.onResize Resized
-        , iframeFocused Raise
+        , iframeFocused (WinId >> Raise)
         , case model.drag of
             Just _ ->
                 Sub.batch
@@ -799,7 +810,7 @@ view model =
             viewToolbar model
         , Keyed.node "main"
             [ A.class "desk" ]
-            (List.map (\w -> ( w.id, viewWindow model (w.z == top) w )) model.windows
+            (List.map (\w -> ( idString w.id, viewWindow model (w.z == top) w )) model.windows
                 ++ (if List.isEmpty model.windows then
                         [ ( "hint", viewHint ) ]
 
@@ -935,7 +946,7 @@ viewBody : Model -> Win -> Html Msg
 viewBody model win =
     let
         reloads =
-            Dict.get win.id model.reloads |> Maybe.withDefault 0
+            Dict.get (idString win.id) model.reloads |> Maybe.withDefault 0
 
         content =
             if win.url == "" then
@@ -947,7 +958,7 @@ viewBody model win =
                 , iframe
                     [ A.src win.url
                     , A.title win.title
-                    , A.attribute "data-win" win.id
+                    , A.attribute "data-win" (idString win.id)
                     , A.attribute "allow" "autoplay; fullscreen; encrypted-media; picture-in-picture"
                     , A.attribute "allowfullscreen" ""
                     , A.attribute "referrerpolicy" "strict-origin-when-cross-origin"
@@ -975,7 +986,7 @@ viewBody model win =
     Keyed.node "div" [ A.class "body" ] (content :: notice)
 
 
-viewHandle : String -> Edge -> Html Msg
+viewHandle : WinId -> Edge -> Html Msg
 viewHandle id edge =
     div [ A.class ("handle " ++ edgeClass edge), onLeftMouseDown (StartDrag id (Just edge)) ] []
 
