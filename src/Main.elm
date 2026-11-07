@@ -3,6 +3,7 @@ port module Main exposing (main)
 import Browser
 import Browser.Dom
 import Browser.Events
+import Dict exposing (Dict)
 import Html exposing (Attribute, Html, button, div, iframe, input, span, text)
 import Html.Attributes as A
 import Html.Events as E
@@ -10,8 +11,7 @@ import Html.Keyed as Keyed
 import Json.Decode as D
 import Json.Encode as Enc
 import Task
-import Window exposing (Edge(..), Rect, Win)
-import Address
+import Url exposing (Url)
 
 
 
@@ -31,14 +31,48 @@ port iframeFocused : (String -> msg) -> Sub msg
 -- MODEL
 
 
+{-| Windows are kept in insertion order, which is also their DOM order. Never
+reorder this list: moving an iframe in the DOM reloads it. Stacking is
+expressed only through `z`.
+-}
 type alias Model =
     { windows : List Win
     , locked : Bool
     , drag : Maybe Drag
     , editing : Maybe { id : String, draft : String }
+    , reloads : Dict String Int
     , viewport : { width : Int, height : Int }
     , https : Bool
     }
+
+
+type alias Win =
+    { id : String
+    , title : String
+    , url : String
+    , x : Int
+    , y : Int
+    , w : Int
+    , h : Int
+    , z : Int
+    , zoom : Float
+    , maximized : Bool
+    }
+
+
+type alias Rect =
+    { x : Int, y : Int, w : Int, h : Int }
+
+
+type Edge
+    = North
+    | South
+    | East
+    | West
+    | NorthEast
+    | NorthWest
+    | SouthEast
+    | SouthWest
 
 
 type alias Drag =
@@ -50,8 +84,12 @@ type alias Drag =
     }
 
 
+type alias Saved =
+    { windows : List Win, locked : Bool }
+
+
 type alias Flags =
-    { saved : { windows : List Win, locked : Bool }
+    { saved : Saved
     , width : Int
     , height : Int
     , https : Bool
@@ -75,36 +113,12 @@ init value =
       , locked = flags.saved.locked
       , drag = Nothing
       , editing = Nothing
+      , reloads = Dict.empty
       , viewport = { width = flags.width, height = flags.height }
       , https = flags.https
       }
     , Cmd.none
     )
-
-
-flagsDecoder : D.Decoder Flags
-flagsDecoder =
-    D.map4 Flags
-        (D.field "saved"
-            (D.oneOf
-                [ D.map2 (\ws l -> { windows = ws, locked = l })
-                    (D.field "windows" (D.list Window.decoder))
-                    (D.oneOf [ D.field "locked" D.bool, D.succeed False ])
-                , D.succeed { windows = [], locked = False }
-                ]
-            )
-        )
-        (D.field "width" D.int)
-        (D.field "height" D.int)
-        (D.field "https" D.bool)
-
-
-encodeState : Model -> Enc.Value
-encodeState model =
-    Enc.object
-        [ ( "windows", Enc.list Window.encode model.windows )
-        , ( "locked", Enc.bool model.locked )
-        ]
 
 
 
@@ -144,7 +158,7 @@ updateAndSave msg model =
             next.windows /= model.windows || next.locked /= model.locked || model.drag /= Nothing
     in
     if next.drag == Nothing && changed then
-        ( next, Cmd.batch [ cmd, save (encodeState next) ] )
+        ( next, Cmd.batch [ cmd, save (encodeSaved next) ] )
 
     else
         ( next, cmd )
@@ -155,27 +169,42 @@ update msg model =
     case msg of
         AddWindow ->
             let
-                n =
-                    List.length model.windows
+                id =
+                    freshId model.windows
 
                 offset =
-                    24 + modBy 10 n * 32
+                    24 + modBy 10 (List.length model.windows) * 32
 
                 win =
-                    Window.new (freshId model.windows) offset (topZ model.windows + 1)
+                    { id = id
+                    , title = "New window"
+                    , url = ""
+                    , x = offset
+                    , y = offset
+                    , w = 640
+                    , h = 400
+                    , z = topZ model.windows + 1
+                    , zoom = 1
+                    , maximized = False
+                    }
             in
-            ( { model | windows = model.windows ++ [ win ], editing = Just { id = win.id, draft = "" } }
-            , focusUrlInput win.id
+            ( { model | windows = model.windows ++ [ win ], editing = Just { id = id, draft = "" } }
+            , focusUrlInput id
             )
 
         Close id ->
-            ( { model | windows = List.filter (\w -> w.id /= id) model.windows }, Cmd.none )
+            ( { model
+                | windows = List.filter (\w -> w.id /= id) model.windows
+                , reloads = Dict.remove id model.reloads
+              }
+            , Cmd.none
+            )
 
         Raise id ->
             ( { model | windows = raise id model.windows }, Cmd.none )
 
         StartDrag id edge x y ->
-            case find id model.windows of
+            case findWin id model.windows of
                 Nothing ->
                     ( model, Cmd.none )
 
@@ -192,16 +221,12 @@ update msg model =
 
                                 else
                                     { x = win.x, y = win.y, w = win.w, h = win.h }
-
-                            restore w =
-                                if w.maximized then
-                                    { w | maximized = False, x = base.x, y = base.y }
-
-                                else
-                                    w
                         in
                         ( { model
-                            | windows = raise id model.windows |> updateWin id restore
+                            | windows =
+                                model.windows
+                                    |> raise id
+                                    |> updateWin id (\w -> setRect base { w | maximized = False })
                             , drag = Just { id = id, edge = edge, startX = x, startY = y, base = base }
                           }
                         , Cmd.none
@@ -214,12 +239,10 @@ update msg model =
 
                 Just d ->
                     let
-                        rect =
-                            Window.dragRect d.edge d.base (x - d.startX) (y - d.startY)
+                        r =
+                            dragRect d.edge d.base (x - d.startX) (y - d.startY)
                     in
-                    ( { model | windows = updateWin d.id (\w -> { w | x = rect.x, y = rect.y, w = rect.w, h = rect.h }) model.windows }
-                    , Cmd.none
-                    )
+                    ( { model | windows = updateWin d.id (setRect r) model.windows }, Cmd.none )
 
         DragEnd ->
             ( { model | drag = Nothing }, Cmd.none )
@@ -233,10 +256,10 @@ update msg model =
             )
 
         Reload id ->
-            ( { model | windows = updateWin id (\w -> { w | reload = w.reload + 1 }) model.windows }, Cmd.none )
+            ( { model | reloads = Dict.update id (\n -> Just (Maybe.withDefault 0 n + 1)) model.reloads }, Cmd.none )
 
         EditUrl id ->
-            case find id model.windows of
+            case findWin id model.windows of
                 Just win ->
                     ( { model | editing = Just { id = id, draft = win.url } }, focusUrlInput id )
 
@@ -254,11 +277,11 @@ update msg model =
                 Just e ->
                     let
                         url =
-                            Address.normalizeUrl e.draft
+                            normalizeUrl e.draft
 
                         apply w =
                             if url /= "" && url /= w.url then
-                                { w | url = url, title = Address.titleFromUrl url }
+                                { w | url = url, title = titleFromUrl url }
 
                             else
                                 w
@@ -269,7 +292,7 @@ update msg model =
             ( { model | editing = Nothing }, Cmd.none )
 
         Tile ->
-            ( { model | windows = tile (deskSize model) model.windows }, Cmd.none )
+            ( { model | windows = tile (deskArea model) model.windows }, Cmd.none )
 
         Fullscreen ->
             ( model, toggleFullscreen () )
@@ -294,6 +317,108 @@ urlInputId id =
     "url-" ++ id
 
 
+deskArea : Model -> { width : Int, height : Int }
+deskArea model =
+    { width = model.viewport.width
+    , height =
+        model.viewport.height
+            - (if model.locked then
+                0
+
+               else
+                toolbarHeight
+              )
+    }
+
+
+
+-- WINDOW LIST
+
+
+findWin : String -> List Win -> Maybe Win
+findWin id windows =
+    List.filter (\w -> w.id == id) windows |> List.head
+
+
+updateWin : String -> (Win -> Win) -> List Win -> List Win
+updateWin id f =
+    List.map
+        (\w ->
+            if w.id == id then
+                f w
+
+            else
+                w
+        )
+
+
+topZ : List Win -> Int
+topZ windows =
+    List.map .z windows |> List.maximum |> Maybe.withDefault 0
+
+
+{-| Bring a window to the front by raising its `z` (the list order stays the same).
+-}
+raise : String -> List Win -> List Win
+raise id windows =
+    let
+        top =
+            topZ windows
+    in
+    case findWin id windows of
+        Just win ->
+            if win.z == top then
+                windows
+
+            else
+                updateWin id (\w -> { w | z = top + 1 }) windows
+
+        Nothing ->
+            windows
+
+
+{-| Arrange windows in a grid whose cells are as close to square as possible,
+keeping their current reading order (top to bottom, left to right).
+-}
+tile : { width : Int, height : Int } -> List Win -> List Win
+tile area windows =
+    let
+        n =
+            List.length windows
+    in
+    if n == 0 || area.width <= 0 || area.height <= 0 then
+        windows
+
+    else
+        let
+            cols =
+                ceiling (sqrt (toFloat (n * area.width) / toFloat area.height))
+
+            rows =
+                ceiling (toFloat n / toFloat cols)
+
+            cw =
+                area.width // cols
+
+            ch =
+                area.height // rows
+
+            order =
+                windows
+                    |> List.sortBy (\w -> ( w.y, w.x ))
+                    |> List.indexedMap (\i w -> ( w.id, i ))
+                    |> Dict.fromList
+
+            place w =
+                let
+                    i =
+                        Dict.get w.id order |> Maybe.withDefault 0
+                in
+                { w | maximized = False, x = modBy cols i * cw, y = (i // cols) * ch, w = cw, h = ch }
+        in
+        List.map place windows
+
+
 freshId : List Win -> String
 freshId windows =
     let
@@ -311,108 +436,307 @@ freshId windows =
     go (List.length windows + 1)
 
 
-find : String -> List Win -> Maybe Win
-find id =
-    List.filter (\w -> w.id == id) >> List.head
+
+-- GEOMETRY
 
 
-updateWin : String -> (Win -> Win) -> List Win -> List Win
-updateWin id f =
-    List.map
-        (\w ->
-            if w.id == id then
-                f w
-
-            else
-                w
-        )
+setRect : Rect -> Win -> Win
+setRect r win =
+    { win | x = r.x, y = r.y, w = r.w, h = r.h }
 
 
-topZ : List Win -> Int
-topZ =
-    List.map .z >> List.maximum >> Maybe.withDefault 0
+edges : List Edge
+edges =
+    [ North, South, East, West, NorthEast, NorthWest, SouthEast, SouthWest ]
 
 
-{-| Bring a window to the front. Only `z` changes, never the list order, so the
-DOM order stays stable and iframes are not reloaded.
+sides : Edge -> { n : Bool, s : Bool, e : Bool, w : Bool }
+sides edge =
+    case edge of
+        North ->
+            { n = True, s = False, e = False, w = False }
+
+        South ->
+            { n = False, s = True, e = False, w = False }
+
+        East ->
+            { n = False, s = False, e = True, w = False }
+
+        West ->
+            { n = False, s = False, e = False, w = True }
+
+        NorthEast ->
+            { n = True, s = False, e = True, w = False }
+
+        NorthWest ->
+            { n = True, s = False, e = False, w = True }
+
+        SouthEast ->
+            { n = False, s = True, e = True, w = False }
+
+        SouthWest ->
+            { n = False, s = True, e = False, w = True }
+
+
+minWidth : Int
+minWidth =
+    160
+
+
+minHeight : Int
+minHeight =
+    100
+
+
+snap : Int -> Int
+snap v =
+    round (toFloat v / 8) * 8
+
+
+{-| Compute the new rectangle for a move (`Nothing`) or a resize from an edge,
+given the rectangle at drag start and the pointer delta.
 -}
-raise : String -> List Win -> List Win
-raise id windows =
+dragRect : Maybe Edge -> Rect -> Int -> Int -> Rect
+dragRect edge base dx dy =
+    case edge of
+        Nothing ->
+            { base | x = snap (base.x + dx), y = max 0 (snap (base.y + dy)) }
+
+        Just e ->
+            let
+                side =
+                    sides e
+
+                right =
+                    base.x + base.w
+
+                bottom =
+                    base.y + base.h
+
+                -- Snap only the edge being dragged; the opposite edge stays put
+                w =
+                    if side.e then
+                        max minWidth (snap (right + dx) - base.x)
+
+                    else if side.w then
+                        max minWidth (right - snap (base.x + dx))
+
+                    else
+                        base.w
+
+                h =
+                    if side.s then
+                        max minHeight (snap (bottom + dy) - base.y)
+
+                    else if side.n then
+                        max minHeight (bottom - max 0 (snap (base.y + dy)))
+
+                    else
+                        base.h
+            in
+            { x =
+                if side.w then
+                    right - w
+
+                else
+                    base.x
+            , y =
+                if side.n then
+                    bottom - h
+
+                else
+                    base.y
+            , w = w
+            , h = h
+            }
+
+
+
+-- URL
+
+
+{-| Normalize a user-entered URL so it can be shown in an iframe.
+-}
+normalizeUrl : String -> String
+normalizeUrl input =
     let
-        top =
-            topZ windows
-    in
-    case find id windows of
-        Just w ->
-            if w.z == top then
-                windows
+        trimmed =
+            String.trim input
+
+        withScheme =
+            if trimmed == "" || String.contains "://" trimmed then
+                trimmed
 
             else
-                updateWin id (\x -> { x | z = top + 1 }) windows
+                "https://" ++ trimmed
+    in
+    case Url.fromString withScheme |> Maybe.andThen youtubeVideoId of
+        -- Regular YouTube pages refuse to be framed, so convert them to the embed form.
+        -- Browsers only allow autoplay when muted, hence mute=1.
+        Just id ->
+            "https://www.youtube.com/embed/" ++ id ++ "?autoplay=1&mute=1"
 
         Nothing ->
-            windows
+            withScheme
 
 
-deskSize : Model -> { width : Int, height : Int }
-deskSize model =
-    { width = model.viewport.width
-    , height =
-        model.viewport.height
-            - (if model.locked then
-                0
+titleFromUrl : String -> String
+titleFromUrl raw =
+    case Url.fromString raw of
+        Just url ->
+            if String.contains "youtube" url.host then
+                "YouTube"
 
-               else
-                toolbarHeight
-              )
-    }
+            else
+                stripPrefix "www." url.host
+
+        Nothing ->
+            if raw == "" then
+                "New window"
+
+            else
+                raw
 
 
-{-| Arrange windows in a grid whose cells are as close to square as possible.
--}
-tile : { width : Int, height : Int } -> List Win -> List Win
-tile desk windows =
+youtubeVideoId : Url -> Maybe String
+youtubeVideoId url =
     let
-        n =
-            List.length windows
+        host =
+            url.host |> stripPrefix "www." |> stripPrefix "m."
+
+        segments =
+            String.split "/" url.path |> List.filter ((/=) "")
     in
-    if n == 0 then
-        windows
+    if host == "youtu.be" then
+        List.head segments |> Maybe.andThen validVideoId
+
+    else if host == "youtube.com" || host == "youtube-nocookie.com" then
+        case segments of
+            "embed" :: _ ->
+                Nothing
+
+            "live" :: id :: _ ->
+                validVideoId id
+
+            "shorts" :: id :: _ ->
+                validVideoId id
+
+            _ ->
+                url.query
+                    |> Maybe.andThen (queryParam "v")
+                    |> Maybe.andThen validVideoId
 
     else
-        let
-            cols =
-                ceiling (sqrt (toFloat (n * desk.width) / toFloat desk.height))
+        Nothing
 
-            rows =
-                ceiling (toFloat n / toFloat cols)
 
-            cw =
-                desk.width // cols
+queryParam : String -> String -> Maybe String
+queryParam key query =
+    query
+        |> String.split "&"
+        |> List.filterMap
+            (\pair ->
+                case String.split "=" pair of
+                    [ k, v ] ->
+                        if k == key then
+                            Just v
 
-            ch =
-                desk.height // rows
+                        else
+                            Nothing
 
-            order =
-                windows
-                    |> List.sortBy (\w -> ( w.y, w.x ))
-                    |> List.indexedMap (\i w -> ( w.id, i ))
+                    _ ->
+                        Nothing
+            )
+        |> List.head
 
-            index w =
-                order
-                    |> List.filter (\( id, _ ) -> id == w.id)
-                    |> List.head
-                    |> Maybe.map Tuple.second
-                    |> Maybe.withDefault 0
 
-            place w =
-                let
-                    i =
-                        index w
-                in
-                { w | maximized = False, x = modBy cols i * cw, y = (i // cols) * ch, w = cw, h = ch }
-        in
-        List.map place windows
+validVideoId : String -> Maybe String
+validVideoId id =
+    if String.length id == 11 && String.all (\c -> Char.isAlphaNum c || c == '-' || c == '_') id then
+        Just id
+
+    else
+        Nothing
+
+
+stripPrefix : String -> String -> String
+stripPrefix prefix s =
+    if String.startsWith prefix s then
+        String.dropLeft (String.length prefix) s
+
+    else
+        s
+
+
+
+-- JSON
+
+
+flagsDecoder : D.Decoder Flags
+flagsDecoder =
+    D.map4 Flags
+        (D.field "saved" (D.oneOf [ savedDecoder, D.succeed { windows = [], locked = False } ]))
+        (D.field "width" D.int)
+        (D.field "height" D.int)
+        (D.field "https" D.bool)
+
+
+savedDecoder : D.Decoder Saved
+savedDecoder =
+    D.map2 Saved
+        (D.field "windows" (D.list winDecoder))
+        (D.oneOf [ D.field "locked" D.bool, D.succeed False ])
+
+
+encodeSaved : Model -> Enc.Value
+encodeSaved model =
+    Enc.object
+        [ ( "windows", Enc.list encodeWin model.windows )
+        , ( "locked", Enc.bool model.locked )
+        ]
+
+
+encodeWin : Win -> Enc.Value
+encodeWin win =
+    Enc.object
+        [ ( "id", Enc.string win.id )
+        , ( "title", Enc.string win.title )
+        , ( "url", Enc.string win.url )
+        , ( "x", Enc.int win.x )
+        , ( "y", Enc.int win.y )
+        , ( "w", Enc.int win.w )
+        , ( "h", Enc.int win.h )
+        , ( "z", Enc.int win.z )
+        , ( "zoom", Enc.float win.zoom )
+        , ( "maximized", Enc.bool win.maximized )
+        ]
+
+
+winDecoder : D.Decoder Win
+winDecoder =
+    D.succeed Win
+        |> andMap (D.field "id" D.string)
+        |> andMap (D.field "title" D.string)
+        |> andMap (D.field "url" D.string)
+        |> andMap (D.field "x" number)
+        |> andMap (D.field "y" number)
+        |> andMap (D.field "w" number)
+        |> andMap (D.field "h" number)
+        |> andMap (D.oneOf [ D.field "z" number, D.succeed 1 ])
+        |> andMap (D.oneOf [ D.field "zoom" D.float, D.succeed 1 ])
+        |> andMap (D.oneOf [ D.field "maximized" D.bool, D.succeed False ])
+
+
+andMap : D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
+andMap =
+    D.map2 (|>)
+
+
+{-| Accept fractional numbers too (mouse coordinates can be fractional).
+-}
+number : D.Decoder Int
+number =
+    D.map round D.float
 
 
 
@@ -449,11 +773,6 @@ subscriptions model =
         ]
 
 
-number : D.Decoder Int
-number =
-    D.map round D.float
-
-
 
 -- VIEW
 
@@ -488,7 +807,7 @@ view model =
         , case model.drag of
             -- Cover the iframes so they cannot swallow mouse events during a drag
             Just d ->
-                div [ A.class "drag-overlay", A.style "cursor" (Window.cursor d.edge) ] []
+                div [ A.class "drag-overlay", A.style "cursor" (cursor d.edge) ] []
 
             Nothing ->
                 text ""
@@ -544,7 +863,7 @@ viewWindow model active win =
             text ""
 
           else
-            div [] (List.map (viewHandle win.id) Window.edges)
+            div [] (List.map (viewHandle win.id) edges)
         ]
 
 
@@ -607,12 +926,16 @@ viewTitlebar model win =
 viewBody : Model -> Win -> Html Msg
 viewBody model win =
     let
+        reloads =
+            Dict.get win.id model.reloads |> Maybe.withDefault 0
+
         content =
             if win.url == "" then
                 ( "empty", div [ A.class "empty" ] [ text "Enter a URL" ] )
 
             else
-                ( "frame-" ++ String.fromInt win.reload
+                -- A new key makes Elm create a fresh iframe, which reloads the page
+                ( "frame-" ++ String.fromInt reloads
                 , iframe
                     [ A.src win.url
                     , A.title win.title
@@ -644,7 +967,66 @@ viewBody model win =
 
 viewHandle : String -> Edge -> Html Msg
 viewHandle id edge =
-    div [ A.class ("handle " ++ Window.edgeName edge), onLeftMouseDown (StartDrag id (Just edge)) ] []
+    div [ A.class ("handle " ++ edgeClass edge), onLeftMouseDown (StartDrag id (Just edge)) ] []
+
+
+edgeClass : Edge -> String
+edgeClass edge =
+    case edge of
+        North ->
+            "n"
+
+        South ->
+            "s"
+
+        East ->
+            "e"
+
+        West ->
+            "w"
+
+        NorthEast ->
+            "ne"
+
+        NorthWest ->
+            "nw"
+
+        SouthEast ->
+            "se"
+
+        SouthWest ->
+            "sw"
+
+
+cursor : Maybe Edge -> String
+cursor edge =
+    case edge of
+        Nothing ->
+            "grabbing"
+
+        Just North ->
+            "ns-resize"
+
+        Just South ->
+            "ns-resize"
+
+        Just East ->
+            "ew-resize"
+
+        Just West ->
+            "ew-resize"
+
+        Just NorthEast ->
+            "nesw-resize"
+
+        Just SouthWest ->
+            "nesw-resize"
+
+        Just NorthWest ->
+            "nwse-resize"
+
+        Just SouthEast ->
+            "nwse-resize"
 
 
 iconButton : String -> String -> Msg -> Html Msg
