@@ -57,6 +57,7 @@ type alias Win =
     , z : Int
     , zoom : Float
     , maximized : Bool
+    , noticeDismissed : Bool
     }
 
 
@@ -135,6 +136,7 @@ type Msg
     | ToggleMaximize String
     | SetZoom String Float
     | Reload String
+    | DismissNotice String
     | EditUrl String
     | Draft String
     | CommitUrl
@@ -186,6 +188,7 @@ update msg model =
                     , z = topZ model.windows + 1
                     , zoom = 1
                     , maximized = False
+                    , noticeDismissed = False
                     }
             in
             ( { model | windows = model.windows ++ [ win ], editing = Just { id = id, draft = "" } }
@@ -258,6 +261,9 @@ update msg model =
         Reload id ->
             ( { model | reloads = Dict.update id (\n -> Just (Maybe.withDefault 0 n + 1)) model.reloads }, Cmd.none )
 
+        DismissNotice id ->
+            ( { model | windows = updateWin id (\w -> { w | noticeDismissed = True }) model.windows }, Cmd.none )
+
         EditUrl id ->
             case findWin id model.windows of
                 Just win ->
@@ -281,7 +287,7 @@ update msg model =
 
                         apply w =
                             if url /= "" && url /= w.url then
-                                { w | url = url, title = titleFromUrl url }
+                                { w | url = url, title = titleFromUrl url, noticeDismissed = False }
 
                             else
                                 w
@@ -709,6 +715,7 @@ encodeWin win =
         , ( "z", Enc.int win.z )
         , ( "zoom", Enc.float win.zoom )
         , ( "maximized", Enc.bool win.maximized )
+        , ( "noticeDismissed", Enc.bool win.noticeDismissed )
         ]
 
 
@@ -725,6 +732,7 @@ winDecoder =
         |> andMap (D.oneOf [ D.field "z" number, D.succeed 1 ])
         |> andMap (D.oneOf [ D.field "zoom" D.float, D.succeed 1 ])
         |> andMap (D.oneOf [ D.field "maximized" D.bool, D.succeed False ])
+        |> andMap (D.oneOf [ D.field "noticeDismissed" D.bool, D.succeed False ])
 
 
 andMap : D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
@@ -952,10 +960,12 @@ viewBody model win =
 
         -- HTTP pages framed inside an HTTPS page are blocked as mixed content
         notice =
-            if model.https && String.startsWith "http:" win.url then
+            if model.https && String.startsWith "http:" win.url && not win.noticeDismissed then
                 [ ( "notice"
                   , div [ A.class "notice" ]
-                        [ text "HTTP pages are blocked inside an HTTPS page. Allow \"Insecure content\" for this site in your browser settings to show it." ]
+                        [ span [] [ text "HTTP pages are blocked inside an HTTPS page. Allow \"Insecure content\" for this site in your browser settings to show it." ]
+                        , button [ A.title "Dismiss", E.onClick (DismissNotice win.id) ] [ text "×" ]
+                        ]
                   )
                 ]
 
