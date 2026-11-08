@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # The Elm compiler pinned in package.json
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+
+  # Elm packages in elm.json
+  - package-ecosystem: elm
+    directory: /
+    schedule:
+      interval: monthly
+
+  # Actions used in .github/workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
