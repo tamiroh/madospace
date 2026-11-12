@@ -878,7 +878,7 @@ view model =
                    )
             )
         , if model.locked then
-            button [ A.class "unlock", A.title "Unlock", E.onClick (SetLocked False) ] [ text "🔓" ]
+            button [ A.class "unlock", A.title "Unlock", E.onClick (SetLocked False) ] [ span [ A.class "icon icon-unlock" ] [] ]
 
           else
             text ""
@@ -895,12 +895,11 @@ view model =
 viewToolbar : Model -> Html Msg
 viewToolbar model =
     Html.header [ A.class "toolbar", A.style "height" (px toolbarHeight) ]
-        [ span [ A.class "logo" ] [ text "madospace" ]
-        , button [ E.onClick AddWindow ] [ text "+ New window" ]
+        [ button [ E.onClick AddWindow ] [ text "+ New window" ]
         , span [ A.class "spacer" ] []
         , button [ E.onClick Tile, A.disabled (List.isEmpty model.windows) ] [ text "Tile" ]
         , button [ E.onClick Fullscreen ] [ text "Fullscreen" ]
-        , button [ E.onClick (SetLocked True), A.title "Hide the toolbar and title bars and freeze the layout" ] [ text "🔒 Lock" ]
+        , button [ E.onClick (SetLocked True), A.title "Hide the toolbar and title bars and freeze the layout" ] [ span [ A.class "icon icon-lock" ] [], text " Lock" ]
         ]
 
 
